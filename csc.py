@@ -54,6 +54,7 @@ class ZWaveRCVDLogEvent:
         self.button_id = None
         self.press_type = None
         self.level = None
+        self.checksum = None
 
         self.valid_event = True
 
@@ -65,7 +66,10 @@ class ZWaveRCVDLogEvent:
                 self.controller_id = self.bytes[5]
                 self.button_id = self.bytes[11]
                 self.level = self.bytes[9]
+                self.checksum = self.bytes[12]
+
                 press_type = self.bytes[10]
+
                 if press_type == '00':
                     self.press_type = CommandType.SINGLE_CLICK
                 elif press_type == '03':
@@ -93,6 +97,7 @@ class EightButtonController:
         self.double_click_action_mappings = {}
         self.hold_button_dimmer_mappings = {}
         self.discard_next_release_event = False
+        self.last_request = None
 
     def addSingleClickActionMapping(self, button_id, action_group):
         self.single_click_action_mappings[button_id] = action_group
@@ -105,6 +110,13 @@ class EightButtonController:
 
     def doRequest(self, request):
         try:
+            if self.last_request is not None:
+                if request.checksum == self.last_request.checksum:
+                    print("No ACK - command repeated. Disregard. Event fired already.")
+                    return
+
+            self.last_request = request
+
             if self.discard_next_release_event and request.press_type == CommandType.RELEASE:
                 print("Dismissin...")
                 # Last event was a double click (which ends with a release event that we need to dismiss).
@@ -237,7 +249,22 @@ def setup_controllers():
     controller.addDoubleClickActionMapping('01', 'Guidelights Off')  # Button 1 - For double click
     controller.addHoldButtonDimmerMapping('02', 'Pool Side Area')  # Button 2 - For hold/release
 
+    controller.addSingleClickActionMapping('05', 'Pool Side Area All On')  # Button 1 - For single click
+    controller.addDoubleClickActionMapping('05', 'Pool Side Area All Off')  # Button 1 - For double click
 
+    controller.addSingleClickActionMapping('06', 'Toggle Pool Side Area All')  # Button 1 - For single click
+    controller.addDoubleClickActionMapping('06', 'Pool Side Area All 10%')  # Button 1 - For double click
+
+
+    controller.addSingleClickActionMapping('02', 'Yousif Gypsum')  # Button 1 - For single click
+    controller.addSingleClickActionMapping('03', 'Yousif Main')  # Button 1 - For single click
+ 
+    controller.addSingleClickActionMapping('04', 'Vibia')  # Button 1 - For single click
+ 
+    controller.addSingleClickActionMapping('07', 'Washers')  # Button 1 - For single click
+ 
+    controller.addSingleClickActionMapping('08', 'Play Room')  # Button 1 - For single click
+ 
     # Scenes
     #controller.addSingleClickActionMapping('05', 'Toggle kitchen lights')  # Button 5 - For single click
 
@@ -254,12 +281,12 @@ def run_loop():
     mtime_cur = mtime_last
 
     while True:
-        time.sleep(0.15)
+        time.sleep(0.05)
 
         if os.path.isfile(LOG_PATH):
             mtime_cur = os.path.getmtime(LOG_PATH)
             if mtime_cur != mtime_last:
-                new_events = get_last_controller_events(10, ['38', ])
+                new_events = get_last_controller_events(2, ['38', ])
                 execute_events(new_events)
 
             mtime_last = mtime_cur
