@@ -92,7 +92,7 @@ class EightButtonController:
         self.single_click_action_mappings = {}
         self.double_click_action_mappings = {}
         self.hold_button_dimmer_mappings = {}
-        self.discard_next_event = False
+        self.discard_next_release_event = False
 
     def addSingleClickActionMapping(self, button_id, action_group):
         self.single_click_action_mappings[button_id] = action_group
@@ -100,15 +100,27 @@ class EightButtonController:
     def addDoubleClickActionMapping(self, button_id, action_group):
         self.double_click_action_mappings[button_id] = action_group
 
-    def addHoldButtonDimmerMapping(self, button_id, device_id, down=False):
-        self.hold_button_dimmer_mappings[button_id] = device_id
+    def addHoldButtonDimmerMapping(self, button_id, device_id):
+        self.hold_button_dimmer_mappings[button_id] = (device_id, False)
 
     def doRequest(self, request):
         try:
-            if self.discard_next_event:
-                # Last event was a double click (which ends with a single click event that we need to dismiss)
-                self.discard_next_event = False
+            if self.discard_next_release_event and request.press_type == CommandType.RELEASE:
+                print("Dismissin...")
+                # Last event was a double click (which ends with a release event that we need to dismiss).
+                # Besides dismisal, we use it to note the next direction dimming should go to.
+                device, dim_down = self.hold_button_dimmer_mappings[request.button_id]
+                if device is not None:
+                    print("Dismissing...2")
+                    if dim_down:
+                        print("Dismissing...3")
+                        self.hold_button_dimmer_mappings[request.button_id] = (device, False)
+                    else:
+                        print("Dismissing...4")
+                        self.hold_button_dimmer_mappings[request.button_id] = (device, True)
+                self.discard_next_release_event = False
                 return
+
             if request.press_type == CommandType.SINGLE_CLICK:
                 action_group = self.single_click_action_mappings[request.button_id]
                 if action_group is not None:
@@ -119,10 +131,16 @@ class EightButtonController:
                 if action_group is not None:
                     doActionGroup(action_group)
             elif request.press_type == CommandType.HOLD:
-                device = self.hold_button_dimmer_mappings[request.button_id]
+                print("HOLD")
+                device, dim_down = self.hold_button_dimmer_mappings[request.button_id]
+                print("device {} down {}".format(device, dim_down))
                 if device is not None:
-                    brightness = request.level
-                    doDimmingAction(device, brightness)
+                    if dim_down:
+                        doDimmingAction(device, True)
+                        self.discard_next_release_event = True
+                    else:
+                        doDimmingAction(device, False)
+                        self.discard_next_release_event = True
         except Exception as e:
             print("No action defined" + str(e))
 
@@ -168,17 +186,37 @@ def doActionGroup(action_group_title):
     print("Action group {}".format(action_group_title))
 
 
-def doDimmingAction(device_title, brightness):
-    brightness = int(brightness, 16)
-    OldRange = (255 - 0)
-    NewRange = (100 - 0)
-    brightness = int((((brightness - 0) * NewRange) / OldRange) + 0)
+def getBrightnessLevel(device_title):
+    url = "http://{}:{}/devices/{}.json".format(host, port, device_title)
 
-    url = "http://{}:{}/devices/{}?brightness={}&_method=put".format(host, port, device_title, brightness)
+    device_response = requests.get(url, auth=requests.auth.HTTPDigestAuth(user, password))
+    device_response = device_response.json()
+
+    current_brightness = device_response['brightness']
+
+    return current_brightness
+
+
+def doDimmingAction(device_title, down = False):
+   
+    current_brightness = getBrightnessLevel(device_title)
+
+    print("Brightness {}".format(current_brightness))
+
+    if down:
+        new_brightness = current_brightness - 10
+        if new_brightness < 0:
+            new_brightness = 0
+    else:
+        new_brightness = current_brightness + 10
+        if new_brightness > 100:
+            new_brightness = 100
+
+    url = "http://{}:{}/devices/{}?brightness={}&_method=put".format(host, port, device_title, new_brightness)
 
     requests.get(url, auth=requests.auth.HTTPDigestAuth(user, password))
 
-    print("Dimming device {}, level {}".format(device_title, brightness))
+    print("Dimming device {}, level {}".format(device_title, new_brightness))
 
 
 def execute_events(events):
@@ -197,7 +235,8 @@ def setup_controllers():
     # General
     controller.addSingleClickActionMapping('01', 'Guidelights On (100%)')  # Button 1 - For single click
     controller.addDoubleClickActionMapping('01', 'Guidelights Off')  # Button 1 - For double click
-    #controller.addHoldButtonDimmerMapping('05', 'Counter lights')  # Button 5 - For hold/release
+    controller.addHoldButtonDimmerMapping('02', 'Pool Side Area')  # Button 2 - For hold/release
+
 
     # Scenes
     #controller.addSingleClickActionMapping('05', 'Toggle kitchen lights')  # Button 5 - For single click
@@ -215,7 +254,7 @@ def run_loop():
     mtime_cur = mtime_last
 
     while True:
-        time.sleep(0.05)
+        time.sleep(0.15)
 
         if os.path.isfile(LOG_PATH):
             mtime_cur = os.path.getmtime(LOG_PATH)
